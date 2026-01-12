@@ -32,11 +32,9 @@ type Config struct {
 	Path string `json:"path"`
 }
 
-// Validate ensures all parts of the config are valid and important fields exist.
+// Validate performs validation ONLY.
+// Do NOT mutate config here — mutations are discarded by Viam.
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
-	if cfg.Path == "" {
-		cfg.Path = defaultDiskPath
-	}
 	return nil, nil, nil
 }
 
@@ -61,6 +59,12 @@ func newWindowsDiagnosticsDisk(
 	conf, err := resource.NativeConfig[*Config](rawConf)
 	if err != nil {
 		return nil, err
+	}
+
+	// Default path
+	if conf.Path == "" {
+		logger.Debugf("No disk path configured; defaulting to %q", defaultDiskPath)
+		conf.Path = defaultDiskPath
 	}
 
 	return NewDisk(ctx, deps, rawConf.ResourceName(), conf, logger)
@@ -101,7 +105,14 @@ func (s *windowsDiagnosticsDisk) Readings(
 	s.logger.Debug("Disk Readings called")
 	s.logger.Debugf("Raw config path: %q", s.cfg.Path)
 
-	path := normalizeDiskPath(s.cfg.Path)
+	// Fallback
+	path := s.cfg.Path
+	if path == "" {
+		s.logger.Debugf("Path unexpectedly empty at Readings(); defaulting to %q", defaultDiskPath)
+		path = defaultDiskPath
+	}
+
+	path = normalizeDiskPath(path)
 	s.logger.Debugf("Normalized disk path: %q", path)
 
 	total, free, available, err := getDiskUsage(path, s.logger)

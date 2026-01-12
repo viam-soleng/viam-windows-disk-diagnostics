@@ -1,0 +1,13 @@
+{
+  "module_name": "windows-diagnostics",
+  "namespace": "bill",
+  "language": "go",
+  "resource_type": "component",
+  "resource_subtype": "sensor",
+  "model_name": "disk",
+  "enable_cloud_build": true,
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2026-01-12T16:55:25.978402Z",
+  "module_readme_link": "README.md"
+}

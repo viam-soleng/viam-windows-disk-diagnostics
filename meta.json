@@ -1,0 +1,27 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "bill:windows-diagnostics",
+  "visibility": "public",
+  "url": "",
+  "description": "Modular sensor component: disk",
+  "models": [
+    {
+      "api": "rdk:component:sensor",
+      "model": "bill:windows-diagnostics:disk",
+      "short_description": "Provide a short (100 characters or less) description of this model here",
+      "markdown_link": "README.md#model-billwindows-diagnosticsdisk"
+    }
+  ],
+  "applications": null,
+  "markdown_link": "README.md",
+  "entrypoint": "bin/windows-diagnostics",
+  "first_run": "",
+  "build": {
+    "build": "make module.tar.gz",
+    "setup": "make setup",
+    "path": "module.tar.gz",
+    "arch": [
+      "windows/amd64"
+    ]
+  }
+}

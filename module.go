@@ -5,6 +5,7 @@ package windowsdiagnostics
 import (
 	"context"
 	"errors"
+	"math"
 	"syscall"
 
 	sensor "go.viam.com/rdk/components/sensor"
@@ -124,7 +125,9 @@ func (s *windowsDiagnosticsDisk) Readings(
 
 	usedPercent := 0.0
 	if total > 0 {
-		usedPercent = float64(used) / float64(total) * 100
+		usedPercent = math.Round(
+			(float64(used)/float64(total))*100*10,
+		) / 10
 	}
 
 	return map[string]interface{}{

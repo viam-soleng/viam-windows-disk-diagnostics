@@ -5,6 +5,7 @@ package windowsdiagnostics
 import (
 	"context"
 	"errors"
+	"syscall"
 
 	sensor "go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/logging"
@@ -97,10 +98,13 @@ func (s *windowsDiagnosticsDisk) Readings(
 	extra map[string]interface{},
 ) (map[string]interface{}, error) {
 
-	path := normalizeDiskPath(s.cfg.Path)
-	s.logger.Debugf("Resolved disk path: %q", path)
+	s.logger.Debug("Disk Readings called")
+	s.logger.Debugf("Raw config path: %q", s.cfg.Path)
 
-	total, free, available, err := getDiskUsage(path)
+	path := normalizeDiskPath(s.cfg.Path)
+	s.logger.Debugf("Normalized disk path: %q", path)
+
+	total, free, available, err := getDiskUsage(path, s.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -148,11 +152,18 @@ func normalizeDiskPath(p string) string {
 	return p
 }
 
-func getDiskUsage(path string) (total, free, available uint64, err error) {
+func getDiskUsage(
+	path string,
+	logger logging.Logger,
+) (total, free, available uint64, err error) {
+
 	var freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes uint64
+
+	logger.Debugf("Calling GetDiskFreeSpaceEx(%q)", path)
 
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
+		logger.Debugf("UTF16PtrFromString failed: %v", err)
 		return 0, 0, 0, err
 	}
 
@@ -162,9 +173,32 @@ func getDiskUsage(path string) (total, free, available uint64, err error) {
 		&totalNumberOfBytes,
 		&totalNumberOfFreeBytes,
 	)
+
 	if err != nil {
+		if errno, ok := err.(syscall.Errno); ok {
+			logger.Debugf(
+				"GetDiskFreeSpaceEx failed: errno=%d (%s)",
+				uintptr(errno),
+				errno.Error(),
+			)
+		} else {
+			logger.Debugf("GetDiskFreeSpaceEx failed: %v", err)
+		}
+
+		logger.Debugf("Path bytes: %v", []byte(path))
+		for i, r := range path {
+			logger.Debugf("Path rune[%d]: %q (%U)", i, r, r)
+		}
+
 		return 0, 0, 0, err
 	}
+
+	logger.Debugf(
+		"GetDiskFreeSpaceEx success: total=%d free=%d available=%d",
+		totalNumberOfBytes,
+		totalNumberOfFreeBytes,
+		freeBytesAvailable,
+	)
 
 	return totalNumberOfBytes, totalNumberOfFreeBytes, freeBytesAvailable, nil
 }

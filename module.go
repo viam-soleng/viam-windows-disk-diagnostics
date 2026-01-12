@@ -1,9 +1,10 @@
+//go:build windows
+
 package windowsdiagnostics
 
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	sensor "go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/logging"
@@ -31,15 +32,6 @@ type Config struct {
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
-// Returns three values:
-//  1. Required dependencies: other resources that must exist for this resource to work.
-//  2. Optional dependencies: other resources that may exist but are not required.
-//  3. An error if any Config fields are missing or invalid.
-//
-// The `path` parameter indicates
-// where this resource appears in the machine's JSON configuration
-// (for example, "components.0"). You can use it in error messages
-// to indicate which resource has a problem.
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.Path == "" {
 		cfg.Path = defaultDiskPath
@@ -50,8 +42,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 type windowsDiagnosticsDisk struct {
 	resource.AlwaysRebuild
 
-	name resource.Name
-
+	name   resource.Name
 	logger logging.Logger
 	cfg    *Config
 
@@ -59,17 +50,28 @@ type windowsDiagnosticsDisk struct {
 	cancelFunc func()
 }
 
-func newWindowsDiagnosticsDisk(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (sensor.Sensor, error) {
+func newWindowsDiagnosticsDisk(
+	ctx context.Context,
+	deps resource.Dependencies,
+	rawConf resource.Config,
+	logger logging.Logger,
+) (sensor.Sensor, error) {
+
 	conf, err := resource.NativeConfig[*Config](rawConf)
 	if err != nil {
 		return nil, err
 	}
 
 	return NewDisk(ctx, deps, rawConf.ResourceName(), conf, logger)
-
 }
 
-func NewDisk(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (sensor.Sensor, error) {
+func NewDisk(
+	ctx context.Context,
+	deps resource.Dependencies,
+	name resource.Name,
+	conf *Config,
+	logger logging.Logger,
+) (sensor.Sensor, error) {
 
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
@@ -80,6 +82,9 @@ func NewDisk(ctx context.Context, deps resource.Dependencies, name resource.Name
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}
+
+	logger.Infof("Windows disk diagnostics using path %q", conf.Path)
+
 	return s, nil
 }
 
@@ -92,16 +97,23 @@ func (s *windowsDiagnosticsDisk) Readings(
 	extra map[string]interface{},
 ) (map[string]interface{}, error) {
 
-	total, free, available, err := getDiskUsage(s.cfg.Path)
+	path := normalizeDiskPath(s.cfg.Path)
+	s.logger.Debugf("Resolved disk path: %q", path)
+
+	total, free, available, err := getDiskUsage(path)
 	if err != nil {
 		return nil, err
 	}
 
 	used := total - free
-	usedPercent := float64(used) / float64(total) * 100
+
+	usedPercent := 0.0
+	if total > 0 {
+		usedPercent = float64(used) / float64(total) * 100
+	}
 
 	return map[string]interface{}{
-		"path":            s.cfg.Path,
+		"path":            path,
 		"total_bytes":     total,
 		"free_bytes":      free,
 		"available_bytes": available,
@@ -110,14 +122,30 @@ func (s *windowsDiagnosticsDisk) Readings(
 	}, nil
 }
 
-func (s *windowsDiagnosticsDisk) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	return nil, fmt.Errorf("not implemented")
+func (s *windowsDiagnosticsDisk) DoCommand(
+	ctx context.Context,
+	cmd map[string]interface{},
+) (map[string]interface{}, error) {
+	return nil, errUnimplemented
 }
 
 func (s *windowsDiagnosticsDisk) Close(context.Context) error {
-	// Put close code here
 	s.cancelFunc()
 	return nil
+}
+
+// --- helpers ---
+
+func normalizeDiskPath(p string) string {
+	// "C:" → "C:\"
+	if len(p) == 2 && p[1] == ':' {
+		return p + "\\"
+	}
+	// Defensive: "C" → "C:\"
+	if len(p) == 1 {
+		return p + ":\\"
+	}
+	return p
 }
 
 func getDiskUsage(path string) (total, free, available uint64, err error) {

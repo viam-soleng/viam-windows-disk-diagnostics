@@ -1,18 +1,18 @@
-# Module windows-diagnostics 
+# Module windows-diagnostics
 
-Provide a description of the purpose of the module and any relevant information.
+This module provides Windows disk diagnostics capabilities for Viam-powered machines.
 
 ## Model bill:windows-diagnostics:disk
 
-Provide a description of the model and any relevant information.
+This Windows diagnostics model for Viam enables monitoring of disk space on a specified volume.
 
 ### Configuration
+
 The following attribute template can be used to configure this model:
 
 ```json
 {
-"attribute_1": <float>,
-"attribute_2": <string>
+  "path": "<string>"
 }
 ```
 
@@ -20,31 +20,14 @@ The following attribute template can be used to configure this model:
 
 The following attributes are available for this model:
 
-| Name          | Type   | Inclusion | Description                |
-|---------------|--------|-----------|----------------------------|
-| `attribute_1` | float  | Required  | Description of attribute 1 |
-| `attribute_2` | string | Optional  | Description of attribute 2 |
+| Name   | Type   | Inclusion | Description                                              |
+|--------|--------|-----------|----------------------------------------------------------|
+| `path` | string | Required  | The path to the disk or volume to diagnose (e.g. `C:\\`) |
 
 #### Example Configuration
 
 ```json
 {
-  "attribute_1": 1.0,
-  "attribute_2": "foo"
-}
-```
-
-### DoCommand
-
-If your model implements DoCommand, provide an example payload of each command that is supported and the arguments that can be used. If your model does not implement DoCommand, remove this section.
-
-#### Example DoCommand
-
-```json
-{
-  "command_name": {
-    "arg1": "foo",
-    "arg2": 1
-  }
+  "path": "C:\\"
 }
 ```

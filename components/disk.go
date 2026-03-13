@@ -1,6 +1,6 @@
 //go:build windows
 
-package windowsdiagnostics
+package components
 
 import (
 	"context"

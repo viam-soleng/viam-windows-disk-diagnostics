@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"windowsdiagnostics"
+	"windowsdiagnostics/components"
+
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 	sensor "go.viam.com/rdk/components/sensor"
@@ -22,9 +23,9 @@ func realMain() error {
 	deps := resource.Dependencies{}
 	// can load these from a remote machine if you need
 
-	cfg := windowsdiagnostics.Config{}
+	cfg := components.Config{}
 
-	thing, err := windowsdiagnostics.NewDisk(ctx, deps, sensor.Named("foo"), &cfg, logger)
+	thing, err := components.NewDisk(ctx, deps, sensor.Named("foo"), &cfg, logger)
 	if err != nil {
 		return err
 	}

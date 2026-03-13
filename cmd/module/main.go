@@ -1,16 +1,17 @@
 package main
 
 import (
-	"windowsdiagnostics"
+	"windowsdiagnostics/components"
+
+	sensor "go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/module"
 	"go.viam.com/rdk/resource"
-	sensor "go.viam.com/rdk/components/sensor"
 )
 
 func main() {
 	module.ModularMain(
-		resource.APIModel{sensor.API, windowsdiagnostics.Disk},
-		resource.APIModel{sensor.API, windowsdiagnostics.CPU},
-		resource.APIModel{sensor.API, windowsdiagnostics.Memory},
+		resource.APIModel{sensor.API, components.Disk},
+		resource.APIModel{sensor.API, components.CPU},
+		resource.APIModel{sensor.API, components.Memory},
 	)
 }

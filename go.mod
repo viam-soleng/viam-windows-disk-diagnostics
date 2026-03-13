@@ -4,7 +4,7 @@ go 1.25.1
 
 require (
 	go.viam.com/rdk v0.108.3
-	golang.org/x/sys v0.40.0
+	golang.org/x/sys v0.42.0
 )
 
 require (

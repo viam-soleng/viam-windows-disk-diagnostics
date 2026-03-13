@@ -17,7 +17,7 @@ import (
 const defaultDiskPath = "C:\\"
 
 var (
-	Disk             = resource.NewModel("bill", "windows-diagnostics", "disk")
+	Disk             = resource.NewModel("viam", "windows-diagnostics", "disk")
 	errUnimplemented = errors.New("unimplemented")
 )
 

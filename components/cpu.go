@@ -6,6 +6,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"unsafe"
 
 	sensor "go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/logging"
@@ -13,7 +14,21 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-var CPU = resource.NewModel("bill", "windows-diagnostics", "cpu")
+var procGetSystemTimes = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetSystemTimes")
+
+func getSystemTimes(idle, kernel, user *windows.Filetime) error {
+	r, _, e := procGetSystemTimes.Call(
+		uintptr(unsafe.Pointer(idle)),
+		uintptr(unsafe.Pointer(kernel)),
+		uintptr(unsafe.Pointer(user)),
+	)
+	if r == 0 {
+		return e
+	}
+	return nil
+}
+
+var CPU = resource.NewModel("viam", "windows-diagnostics", "cpu")
 
 func init() {
 	resource.RegisterComponent(sensor.API, CPU,
@@ -71,7 +86,7 @@ func (s *windowsDiagnosticsCPU) Readings(
 	s.logger.Debug("CPU Readings called")
 
 	var idleTime, kernelTime, userTime windows.Filetime
-	if err := windows.GetSystemTimes(&idleTime, &kernelTime, &userTime); err != nil {
+	if err := getSystemTimes(&idleTime, &kernelTime, &userTime); err != nil {
 		return nil, err
 	}
 

@@ -13,7 +13,29 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-var Memory = resource.NewModel("bill", "windows-diagnostics", "memory")
+var procGlobalMemoryStatusEx = windows.NewLazySystemDLL("kernel32.dll").NewProc("GlobalMemoryStatusEx")
+
+type memoryStatusEx struct {
+	dwLength                uint32
+	dwMemoryLoad            uint32
+	ullTotalPhys            uint64
+	ullAvailPhys            uint64
+	ullTotalPageFile        uint64
+	ullAvailPageFile        uint64
+	ullTotalVirtual         uint64
+	ullAvailVirtual         uint64
+	ullAvailExtendedVirtual uint64
+}
+
+func globalMemoryStatusEx(ms *memoryStatusEx) error {
+	r, _, e := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(ms)))
+	if r == 0 {
+		return e
+	}
+	return nil
+}
+
+var Memory = resource.NewModel("viam", "windows-diagnostics", "memory")
 
 func init() {
 	resource.RegisterComponent(sensor.API, Memory,
@@ -62,14 +84,14 @@ func (s *windowsDiagnosticsMemory) Readings(
 ) (map[string]interface{}, error) {
 	s.logger.Debug("Memory Readings called")
 
-	var memStatus windows.MemoryStatusEx
-	memStatus.Length = uint32(unsafe.Sizeof(memStatus))
-	if err := windows.GlobalMemoryStatusEx(&memStatus); err != nil {
+	var memStatus memoryStatusEx
+	memStatus.dwLength = uint32(unsafe.Sizeof(memStatus))
+	if err := globalMemoryStatusEx(&memStatus); err != nil {
 		return nil, err
 	}
 
-	total := memStatus.TotalPhys
-	available := memStatus.AvailPhys
+	total := memStatus.ullTotalPhys
+	available := memStatus.ullAvailPhys
 	used := total - available
 
 	usedPercent := 0.0

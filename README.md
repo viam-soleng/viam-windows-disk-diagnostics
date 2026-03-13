@@ -2,7 +2,7 @@
 
 This module provides Windows device telemetry sensors for Viam-powered machines: disk space, CPU usage, and memory usage.
 
-## Model bill:windows-diagnostics:disk
+## Model viam:windows-diagnostics:disk
 
 This Windows diagnostics model for Viam enables monitoring of disk space on a specified volume.
 
@@ -32,7 +32,7 @@ The following attributes are available for this model:
 }
 ```
 
-## Model bill:windows-diagnostics:cpu
+## Model viam:windows-diagnostics:cpu
 
 Reports system-wide CPU usage computed as the delta between successive calls to `GetSystemTimes`.
 
@@ -53,7 +53,7 @@ No attributes required.
 {}
 ```
 
-## Model bill:windows-diagnostics:memory
+## Model viam:windows-diagnostics:memory
 
 Reports physical memory usage via `GlobalMemoryStatusEx`.
 

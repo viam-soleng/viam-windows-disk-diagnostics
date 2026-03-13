@@ -8,6 +8,9 @@ import (
 )
 
 func main() {
-	// ModularMain can take multiple APIModel arguments, if your module implements multiple models.
-	module.ModularMain(resource.APIModel{ sensor.API, windowsdiagnostics.Disk})
+	module.ModularMain(
+		resource.APIModel{sensor.API, windowsdiagnostics.Disk},
+		resource.APIModel{sensor.API, windowsdiagnostics.CPU},
+		resource.APIModel{sensor.API, windowsdiagnostics.Memory},
+	)
 }

@@ -3,13 +3,25 @@
   "module_id": "bill:windows-diagnostics",
   "visibility": "public",
   "url": "https://github.com/viam-soleng/viam-windows-disk-diagnostics",
-  "description": "Modular sensor component: disk",
+  "description": "Windows device telemetry sensors: disk, CPU, and memory.",
   "models": [
     {
       "api": "rdk:component:sensor",
       "model": "bill:windows-diagnostics:disk",
-      "short_description": "Provide a short (100 characters or less) description of this model here",
+      "short_description": "Reports disk space usage (total, free, used, percent) for a configured Windows volume.",
       "markdown_link": "README.md#model-billwindows-diagnosticsdisk"
+    },
+    {
+      "api": "rdk:component:sensor",
+      "model": "bill:windows-diagnostics:cpu",
+      "short_description": "Reports CPU usage and idle percentage using Windows GetSystemTimes.",
+      "markdown_link": "README.md#model-billwindows-diagnosticscpu"
+    },
+    {
+      "api": "rdk:component:sensor",
+      "model": "bill:windows-diagnostics:memory",
+      "short_description": "Reports physical memory usage (total, available, used, percent) using Windows GlobalMemoryStatusEx.",
+      "markdown_link": "README.md#model-billwindows-diagnosticsmemory"
     }
   ],
   "applications": null,

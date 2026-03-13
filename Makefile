@@ -33,4 +33,4 @@ module: test module.tar.gz
 all: test module.tar.gz
 
 setup:
-	go mod tidy
+	GOOS=windows GOARCH=amd64 go mod tidy

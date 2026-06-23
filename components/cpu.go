@@ -46,6 +46,7 @@ func (cfg *CPUConfig) Validate(path string) ([]string, []string, error) {
 
 type windowsDiagnosticsCPU struct {
 	resource.AlwaysRebuild
+	resource.Named
 
 	name   resource.Name
 	logger logging.Logger

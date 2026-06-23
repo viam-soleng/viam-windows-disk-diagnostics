@@ -53,6 +53,7 @@ func (cfg *MemoryConfig) Validate(path string) ([]string, []string, error) {
 
 type windowsDiagnosticsMemory struct {
 	resource.AlwaysRebuild
+	resource.Named
 
 	name   resource.Name
 	logger logging.Logger

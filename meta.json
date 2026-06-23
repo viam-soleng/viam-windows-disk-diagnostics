@@ -3,7 +3,7 @@
   "module_id": "viam:windows-diagnostics",
   "visibility": "public",
   "url": "https://github.com/viam-soleng/viam-windows-disk-diagnostics",
-  "description": "Windows device telemetry sensors: disk, CPU, and memory.",
+  "description": "Windows device telemetry sensors: disk, CPU, memory, and task list.",
   "models": [
     {
       "api": "rdk:component:sensor",
@@ -22,6 +22,12 @@
       "model": "viam:windows-diagnostics:memory",
       "short_description": "Reports physical memory usage (total, available, used, percent) using Windows GlobalMemoryStatusEx.",
       "markdown_link": "README.md#model-viamwindows-diagnosticsmemory"
+    },
+    {
+      "api": "rdk:component:sensor",
+      "model": "viam:windows-diagnostics:tasklist",
+      "short_description": "Reports the list of processes currently running on Windows.",
+      "markdown_link": "README.md#model-viamwindows-diagnosticstasklist"
     }
   ],
   "applications": null,

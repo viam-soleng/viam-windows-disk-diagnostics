@@ -41,6 +41,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 
 type windowsDiagnosticsDisk struct {
 	resource.AlwaysRebuild
+	resource.Named
 
 	name   resource.Name
 	logger logging.Logger

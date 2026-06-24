@@ -73,3 +73,30 @@ No attributes required.
 ```json
 {}
 ```
+
+## Model viam:windows-diagnostics:tasklist
+
+Reports the list of processes currently running on the machine — the equivalent of the `tasklist` command.
+
+### Readings
+
+| Key             | Type  | Description                                                 |
+|-----------------|-------|-------------------------------------------------------------|
+| `process_count` | int   | Number of processes reported (after applying `name_filter`) |
+| `processes`     | array | One object per process, sorted by PID                       |
+
+Each entry in `processes` contains `pid`, `ppid`, `name` (e.g. `firefox.exe`), `threads`, and `cpu_percent`.
+
+`cpu_percent` is the process's share of total CPU capacity (0–100, across all logical processors, like Task Manager).
+
+### Configuration
+
+| Name          | Type   | Inclusion | Description                                                                                          |
+|---------------|--------|-----------|------------------------------------------------------------------------------------------------------|
+| `name_filter` | string | Optional  | Case-insensitive substring; only processes whose executable name contains it are reported. Empty reports all. |
+
+```json
+{
+  "name_filter": "firefox"
+}
+```

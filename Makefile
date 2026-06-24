@@ -2,6 +2,7 @@
 GO_BUILD_ENV :=
 GO_BUILD_FLAGS :=
 MODULE_BINARY := bin/windows-diagnostics
+VIAM_TARGET_OS := windows
 
 ifeq ($(VIAM_TARGET_OS), windows)
 	GO_BUILD_ENV += GOOS=windows GOARCH=amd64

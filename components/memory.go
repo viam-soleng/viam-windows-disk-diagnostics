@@ -53,8 +53,8 @@ func (cfg *MemoryConfig) Validate(path string) ([]string, []string, error) {
 
 type windowsDiagnosticsMemory struct {
 	resource.AlwaysRebuild
+	resource.Named
 
-	name   resource.Name
 	logger logging.Logger
 
 	cancelCtx  context.Context
@@ -69,14 +69,12 @@ func newWindowsDiagnosticsMemory(
 ) (sensor.Sensor, error) {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 	return &windowsDiagnosticsMemory{
-		name:       rawConf.ResourceName(),
+		Named:      rawConf.ResourceName().AsNamed(),
 		logger:     logger,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}, nil
 }
-
-func (s *windowsDiagnosticsMemory) Name() resource.Name { return s.name }
 
 func (s *windowsDiagnosticsMemory) Readings(
 	ctx context.Context,

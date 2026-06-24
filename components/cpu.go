@@ -46,8 +46,8 @@ func (cfg *CPUConfig) Validate(path string) ([]string, []string, error) {
 
 type windowsDiagnosticsCPU struct {
 	resource.AlwaysRebuild
+	resource.Named
 
-	name   resource.Name
 	logger logging.Logger
 
 	mu        sync.Mutex
@@ -67,14 +67,12 @@ func newWindowsDiagnosticsCPU(
 ) (sensor.Sensor, error) {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 	return &windowsDiagnosticsCPU{
-		name:       rawConf.ResourceName(),
+		Named:      rawConf.ResourceName().AsNamed(),
 		logger:     logger,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}, nil
 }
-
-func (s *windowsDiagnosticsCPU) Name() resource.Name { return s.name }
 
 // Readings returns CPU usage computed as the delta between successive calls to
 // GetSystemTimes. The first call always returns 0% used because there is no

@@ -13,5 +13,6 @@ func main() {
 		resource.APIModel{sensor.API, components.Disk},
 		resource.APIModel{sensor.API, components.CPU},
 		resource.APIModel{sensor.API, components.Memory},
+		resource.APIModel{sensor.API, components.Tasklist},
 	)
 }

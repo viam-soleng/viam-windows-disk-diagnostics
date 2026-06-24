@@ -43,7 +43,6 @@ type windowsDiagnosticsTasklist struct {
 	resource.AlwaysRebuild
 	resource.Named
 
-	name   resource.Name
 	logger logging.Logger
 	cfg    *TasklistConfig
 
@@ -79,15 +78,13 @@ func newWindowsDiagnosticsTasklist(
 	}
 
 	return &windowsDiagnosticsTasklist{
-		name:       rawConf.ResourceName(),
+		Named:      rawConf.ResourceName().AsNamed(),
 		logger:     logger,
 		cfg:        conf,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}, nil
 }
-
-func (s *windowsDiagnosticsTasklist) Name() resource.Name { return s.name }
 
 // Readings enumerates the running processes and returns a count plus one entry
 // per process (pid, ppid, name, threads), optionally filtered by name_filter.
@@ -97,7 +94,9 @@ func (s *windowsDiagnosticsTasklist) Readings(
 ) (map[string]interface{}, error) {
 	s.logger.Debug("Tasklist Readings called")
 
-	procs, err := listProcesses(s.logger)
+	filter := strings.ToLower(s.cfg.NameFilter)
+
+	procs, err := listProcesses(s.logger, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -114,12 +113,8 @@ func (s *windowsDiagnosticsTasklist) Readings(
 
 	cpuPercents := s.computeCPUPercents(procs, systemCPU)
 
-	filter := strings.ToLower(s.cfg.NameFilter)
 	processes := make([]interface{}, 0, len(procs))
 	for _, p := range procs {
-		if filter != "" && !strings.Contains(strings.ToLower(p.name), filter) {
-			continue
-		}
 		processes = append(processes, map[string]interface{}{
 			"pid":         p.pid,
 			"ppid":        p.ppid,
@@ -160,7 +155,11 @@ type processInfo struct {
 // listProcesses enumerates running processes using the Windows ToolHelp snapshot
 // API (CreateToolhelp32Snapshot + Process32First/Next), the same mechanism the
 // `tasklist` command relies on. Results are sorted by PID for stable output.
-func listProcesses(logger logging.Logger) ([]processInfo, error) {
+//
+// filter, when non-empty, must already be lowercased; processes whose name does
+// not contain it are skipped before a per-process handle is opened, so the CPU-time
+// syscall is only paid for processes that will actually be reported.
+func listProcesses(logger logging.Logger, filter string) ([]processInfo, error) {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		logger.Debugf("CreateToolhelp32Snapshot failed: %v", err)
@@ -175,11 +174,18 @@ func listProcesses(logger logging.Logger) ([]processInfo, error) {
 
 	err = windows.Process32First(snapshot, &entry)
 	for err == nil {
+		name := windows.UTF16ToString(entry.ExeFile[:])
+		// Skip non-matching processes before opening a handle, so the CPU-time syscall
+		// below is only paid for processes that pass the filter.
+		if filter != "" && !strings.Contains(strings.ToLower(name), filter) {
+			err = windows.Process32Next(snapshot, &entry)
+			continue
+		}
 		p := processInfo{
 			pid:     entry.ProcessID,
 			ppid:    entry.ParentProcessID,
 			threads: entry.Threads,
-			name:    windows.UTF16ToString(entry.ExeFile[:]),
+			name:    name,
 		}
 		// CPU time needs a per-process handle. Some processes (e.g. System Idle/PID 0,
 		// and protected processes) can't be opened; leave cpuTime at 0 for those.

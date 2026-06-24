@@ -43,7 +43,6 @@ type windowsDiagnosticsDisk struct {
 	resource.AlwaysRebuild
 	resource.Named
 
-	name   resource.Name
 	logger logging.Logger
 	cfg    *Config
 
@@ -83,7 +82,7 @@ func NewDisk(
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
 	s := &windowsDiagnosticsDisk{
-		name:       name,
+		Named:      name.AsNamed(),
 		logger:     logger,
 		cfg:        conf,
 		cancelCtx:  cancelCtx,
@@ -93,10 +92,6 @@ func NewDisk(
 	logger.Infof("Windows disk diagnostics using path %q", conf.Path)
 
 	return s, nil
-}
-
-func (s *windowsDiagnosticsDisk) Name() resource.Name {
-	return s.name
 }
 
 func (s *windowsDiagnosticsDisk) Readings(

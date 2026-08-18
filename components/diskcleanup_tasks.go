@@ -509,19 +509,39 @@ func isRebootPending(logger logging.Logger) bool {
 	return err == nil && len(pending) > 0
 }
 
+// cleanOutputLines normalizes console output from DISM and cleanmgr into the
+// lines a human would actually have seen: progress-bar frames, in-place redraws,
+// and blank separators are dropped.
+func cleanOutputLines(out string) []string {
+	raw := strings.Split(out, "\n")
+	cleaned := make([]string, 0, len(raw))
+	for _, line := range raw {
+		line = strings.TrimRight(strings.ReplaceAll(line, "\b", ""), " \t\r")
+		// A carriage return left inside the line means the tool redrew it in place,
+		// so only the text after the last one was ever on screen.
+		if i := strings.LastIndex(line, "\r"); i >= 0 {
+			line = line[i+1:]
+		}
+		// Leading whitespace is kept: DISM indents the component-store breakdown
+		// under the total it belongs to, so flattening it would lose the hierarchy.
+		if trimmed := strings.TrimSpace(line); trimmed == "" || isProgressBar(trimmed) {
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	return cleaned
+}
+
+// isProgressBar matches the frames DISM redraws while it works, which look like
+// "[=========  42.3%          ]". Hundreds of them precede every real result line.
+func isProgressBar(line string) bool {
+	return strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") && strings.Contains(line, "%")
+}
+
 // lastLines trims verbose tool output down to the tail, which is where DISM and
 // cleanmgr put their result. The full output is only ever in debug logs.
 func lastLines(out string, n int) string {
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	cleaned := make([]string, 0, len(lines))
-	for _, line := range lines {
-		// DISM draws its progress bar with backspaces and carriage returns.
-		line = strings.TrimSpace(strings.ReplaceAll(line, "\b", ""))
-		line = strings.TrimSpace(line[strings.LastIndex(line, "\r")+1:])
-		if line != "" {
-			cleaned = append(cleaned, line)
-		}
-	}
+	cleaned := cleanOutputLines(out)
 	if len(cleaned) > n {
 		cleaned = cleaned[len(cleaned)-n:]
 	}

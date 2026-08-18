@@ -142,13 +142,18 @@ func (s *windowsDiagnosticsDiskCleanup) doEstimate(ctx context.Context) (map[str
 func (s *windowsDiagnosticsDiskCleanup) doAnalyze(ctx context.Context) (map[string]interface{}, error) {
 	out, err := runCommand(ctx, s.taskTimeout, s.logger,
 		"Dism.exe", "/Online", "/Cleanup-Image", "/AnalyzeComponentStore")
-	result := map[string]interface{}{"output": out}
+	// DISM emits hundreds of progress-bar frames before the report; without this the
+	// caller gets several KB of "[==== 42.3% ]" wrapped around a dozen useful lines.
+	lines := cleanOutputLines(out)
 	if err != nil {
-		return nil, fmt.Errorf("DISM /AnalyzeComponentStore failed: %w (output: %s)", err, out)
+		return nil, fmt.Errorf("DISM /AnalyzeComponentStore failed: %w (output: %s)",
+			err, strings.Join(lines, " | "))
 	}
+
+	result := map[string]interface{}{"output": strings.Join(lines, "\n")}
 	// DISM prints a recommendation line; surface it directly so an operator does not
 	// have to parse the whole report to decide whether a cleanup is worth running.
-	for _, line := range strings.Split(out, "\n") {
+	for _, line := range lines {
 		if strings.Contains(line, "Cleanup Recommended") {
 			if _, value, found := strings.Cut(line, ":"); found {
 				result["cleanup_recommended"] = strings.EqualFold(strings.TrimSpace(value), "yes")

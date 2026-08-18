@@ -1,13 +1,20 @@
 # see https://github.com/viamrobotics/build-action for help
+name: Deploy
+
 on:
   release:
     types: [published]
+
+# The build-action authenticates to the Viam registry with its own key, so the
+# workflow only needs enough scope to check the repository out.
+permissions:
+  contents: read
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: viamrobotics/build-action@v1
         with:
           version: ${{ github.ref_name }}

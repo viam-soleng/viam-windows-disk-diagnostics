@@ -4,6 +4,7 @@ package components
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -29,7 +30,7 @@ func (s *windowsDiagnosticsDiskCleanup) DoCommand(
 	case "estimate":
 		return s.doEstimate(ctx)
 	case "analyze", "analyze_component_store":
-		return s.doAnalyze(ctx)
+		return s.doAnalyze(ctx, cmd)
 	case "":
 		return nil, fmt.Errorf("missing %q key; expected one of: run, status, estimate, analyze", "command")
 	default:
@@ -119,6 +120,12 @@ func (s *windowsDiagnosticsDiskCleanup) doStatus() map[string]interface{} {
 	if s.last != nil {
 		status["last_run"] = runSummary(s.last)
 	}
+	// The component-store analysis runs independently of a cleanup, so status has to
+	// report it separately or a caller polling status cannot tell it is in flight.
+	status["analyzing"] = s.analyzing
+	if s.analysis != nil {
+		status["last_analysis"] = analysisResponse(s.analyzing, s.analysis)
+	}
 	return status
 }
 
@@ -142,28 +149,157 @@ func (s *windowsDiagnosticsDiskCleanup) doEstimate(ctx context.Context) (map[str
 	}, nil
 }
 
-func (s *windowsDiagnosticsDiskCleanup) doAnalyze(ctx context.Context) (map[string]interface{}, error) {
-	out, err := runCommand(ctx, s.taskTimeout, s.logger,
-		"Dism.exe", "/Online", "/Cleanup-Image", "/AnalyzeComponentStore")
-	// DISM emits hundreds of progress-bar frames before the report; without this the
-	// caller gets several KB of "[==== 42.3% ]" wrapped around a dozen useful lines.
-	lines := cleanOutputLines(out)
-	if err != nil {
-		return nil, fmt.Errorf("DISM /AnalyzeComponentStore failed: %w (output: %s)",
-			err, strings.Join(lines, " | "))
-	}
+// doAnalyze reports the component-store analysis, starting one in the background
+// if there is nothing cached yet.
+//
+// The analysis deliberately does not run on the caller's context. DISM
+// /AnalyzeComponentStore takes minutes on a slow machine, which is longer than the
+// gRPC deadline on a DoCommand, so running it inline meant the caller's deadline
+// killed DISM and the command returned an error instead of a report — every time,
+// on exactly the machines the report is most useful for.
+func (s *windowsDiagnosticsDiskCleanup) doAnalyze(
+	ctx context.Context,
+	cmd map[string]interface{},
+) (map[string]interface{}, error) {
+	wait, _ := cmd["wait"].(bool)
+	refresh, _ := cmd["refresh"].(bool)
 
-	result := map[string]interface{}{"output": strings.Join(lines, "\n")}
-	// DISM prints a recommendation line; surface it directly so an operator does not
-	// have to parse the whole report to decide whether a cleanup is worth running.
-	for _, line := range lines {
-		if strings.Contains(line, "Cleanup Recommended") {
-			if _, value, found := strings.Cut(line, ":"); found {
-				result["cleanup_recommended"] = strings.EqualFold(strings.TrimSpace(value), "yes")
-			}
+	var blocked string
+	s.mu.Lock()
+	if !s.analyzing && (s.analysis == nil || refresh) {
+		if s.dismBusyLocked() {
+			blocked = "a component cleanup is running and DISM allows only one servicing " +
+				"operation at a time; try again when it finishes"
+		} else {
+			s.startAnalysisLocked()
 		}
 	}
+	running, done, analysis := s.analyzing, s.analysisDone, s.analysis
+	s.mu.Unlock()
+
+	// "wait": true is for callers that can hold the connection open. It is bounded by
+	// the caller's own deadline, and giving up here does not stop the analysis.
+	if running && wait {
+		select {
+		case <-done:
+			s.mu.Lock()
+			running, analysis = s.analyzing, s.analysis
+			s.mu.Unlock()
+		case <-ctx.Done():
+		}
+	}
+
+	result := analysisResponse(running, analysis)
+	if blocked != "" {
+		result["reason"] = blocked
+	}
 	return result, nil
+}
+
+func analysisResponse(running bool, analysis *componentStoreAnalysis) map[string]interface{} {
+	result := map[string]interface{}{"running": running, "complete": analysis != nil}
+	if analysis == nil {
+		if running {
+			result["note"] = "DISM is analyzing the component store; " +
+				"call analyze again to collect the result"
+		}
+		return result
+	}
+
+	result["output"] = strings.Join(analysis.Lines, "\n")
+	result["measured_at"] = analysis.FinishedAt.UTC().Format(time.RFC3339)
+	result["age_seconds"] = math.Round(time.Since(analysis.FinishedAt).Seconds())
+	result["duration_seconds"] = math.Round(analysis.FinishedAt.Sub(analysis.StartedAt).Seconds())
+	if analysis.Recommended != nil {
+		result["cleanup_recommended"] = *analysis.Recommended
+	}
+	if analysis.Err != "" {
+		result["error"] = analysis.Err
+	}
+	return result
+}
+
+// startAnalysisLocked runs DISM /AnalyzeComponentStore on a background goroutine.
+// Callers must hold s.mu and must have checked s.analyzing.
+func (s *windowsDiagnosticsDiskCleanup) startAnalysisLocked() {
+	done := make(chan struct{})
+	s.analyzing = true
+	s.analysisDone = done
+	started := time.Now()
+
+	go func() {
+		defer close(done)
+
+		// s.cancelCtx, not the caller's: this outlives the DoCommand that started it
+		// and is cancelled only when the component closes.
+		out, err := runCommand(s.cancelCtx, s.taskTimeout, s.logger,
+			"Dism.exe", "/Online", "/Cleanup-Image", "/AnalyzeComponentStore")
+
+		analysis := &componentStoreAnalysis{
+			StartedAt:  started,
+			FinishedAt: time.Now(),
+			// DISM emits hundreds of progress-bar frames before the report; without this
+			// the caller gets several KB of "[==== 42.3% ]" around a dozen useful lines.
+			Lines: cleanOutputLines(out),
+		}
+		if err != nil && !isRebootRequiredExit(err) {
+			analysis.Err = err.Error()
+			s.logger.Warnf("DISM /AnalyzeComponentStore failed: %v (output: %s)",
+				err, lastLines(out, 5))
+		}
+		// DISM prints a recommendation line; surface it directly so an operator does
+		// not have to parse the whole report to decide whether a cleanup is worth it.
+		for _, line := range analysis.Lines {
+			if strings.Contains(line, "Cleanup Recommended") {
+				if _, value, found := strings.Cut(line, ":"); found {
+					recommended := strings.EqualFold(strings.TrimSpace(value), "yes")
+					analysis.Recommended = &recommended
+				}
+			}
+		}
+
+		s.mu.Lock()
+		s.analyzing = false
+		s.analysis = analysis
+		s.mu.Unlock()
+
+		s.logger.Infof("Component store analysis finished in %s",
+			analysis.FinishedAt.Sub(started).Truncate(time.Second))
+	}()
+}
+
+// waitForAnalysis blocks until any in-flight component-store analysis finishes, so
+// a cleanup does not start a second DISM session on top of one.
+func (s *windowsDiagnosticsDiskCleanup) waitForAnalysis(ctx context.Context) error {
+	s.mu.Lock()
+	analyzing, done := s.analyzing, s.analysisDone
+	s.mu.Unlock()
+
+	if !analyzing {
+		return nil
+	}
+	s.logger.Info("Waiting for the component store analysis to finish before running DISM")
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("timed out waiting for the component store analysis to finish: %w", ctx.Err())
+	}
+}
+
+// dismBusyLocked reports whether a cleanup is currently running DISM. Windows
+// permits only one servicing operation at a time, so starting an analysis
+// alongside one would fail with a session-in-use error rather than queue.
+func (s *windowsDiagnosticsDiskCleanup) dismBusyLocked() bool {
+	if !s.running {
+		return false
+	}
+	for _, task := range s.runningTasks {
+		if task == taskDISMComponentCleanup {
+			return true
+		}
+	}
+	return false
 }
 
 // startRunLocked launches a cleanup on a background goroutine and returns a channel
@@ -224,7 +360,9 @@ func (s *windowsDiagnosticsDiskCleanup) executeRun(trigger string, tasks []strin
 		result := s.executeTask(name)
 		run.Tasks = append(run.Tasks, result)
 
-		if result.Status == "error" {
+		if result.Status == "skipped" {
+			s.logger.Warnf("Disk cleanup task %s skipped: %s", name, result.Detail)
+		} else if result.Status == "error" {
 			// One failing task must not abort the rest: the tasks are independent, and
 			// the cheap ones that already succeeded are exactly what keeps the machine
 			// alive when the slow ones are broken.
@@ -291,7 +429,14 @@ func (s *windowsDiagnosticsDiskCleanup) executeTask(name string) taskResult {
 		result.FreedBytes = saturatingSub(freeAfter, freeBefore)
 	}
 	if err != nil {
+		// A precondition the machine has not met is not a failure of the cleanup, and
+		// reporting it as one would have an operator chasing a broken module instead
+		// of scheduling the restart that actually fixes it.
 		result.Status = "error"
+		if errors.Is(err, errServicingPending) {
+			result.Status = "skipped"
+			result.RebootRequired = true
+		}
 		// Keep whatever the task managed to do before it failed: "removed 812 entries;
 		// emptying C:\\Windows\\Temp: access denied" tells an operator far more than
 		// the error alone, which reads as if nothing happened.

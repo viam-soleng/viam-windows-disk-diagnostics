@@ -207,6 +207,19 @@ func (run *cleanupRun) freedBytes() uint64 {
 	return saturatingSub(run.FreeAfter, run.FreeBefore)
 }
 
+// componentStoreAnalysis caches one DISM /AnalyzeComponentStore result. The
+// analysis takes minutes on a slow machine — far longer than a DoCommand caller's
+// deadline — so it is run in the background and collected by a later call.
+type componentStoreAnalysis struct {
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Lines      []string
+	// Recommended is nil when DISM did not print a recommendation line, which is
+	// different from it having printed "No".
+	Recommended *bool
+	Err         string
+}
+
 type windowsDiagnosticsDiskCleanup struct {
 	resource.AlwaysRebuild
 	resource.Named
@@ -238,6 +251,9 @@ type windowsDiagnosticsDiskCleanup struct {
 	estimate     map[string]uint64
 	estimatedAt  time.Time
 	estimating   bool
+	analyzing    bool
+	analysisDone chan struct{}
+	analysis     *componentStoreAnalysis
 }
 
 func newWindowsDiagnosticsDiskCleanup(

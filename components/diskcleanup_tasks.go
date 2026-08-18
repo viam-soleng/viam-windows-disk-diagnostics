@@ -225,11 +225,29 @@ func (s *windowsDiagnosticsDiskCleanup) cleanDeliveryOptimization(ctx context.Co
 // This is the slow task — tens of minutes on a machine that has never been
 // cleaned — and is the reason every task runs off the Readings path.
 func (s *windowsDiagnosticsDiskCleanup) runDISMComponentCleanup(ctx context.Context) (taskOutcome, error) {
+	// An analysis started by DoCommand runs in the background and holds a DISM
+	// session, so starting a cleanup on top of it would collide. Waiting costs a few
+	// minutes at worst; the analysis is read-only and always terminates.
+	if err := s.waitForAnalysis(ctx); err != nil {
+		return taskOutcome{}, err
+	}
+
+	// Checked up front because the alternative is spending minutes in DISM only to
+	// be told the same thing by exit code.
+	if isServicingRebootPending() {
+		return taskOutcome{}, errServicingPending
+	}
+
 	args := []string{"/Online", "/Cleanup-Image", "/StartComponentCleanup"}
 	if s.cfg.DISMResetBase {
 		args = append(args, "/ResetBase")
 	}
 	out, err := runCommand(ctx, s.taskTimeout, s.logger, "Dism.exe", args...)
+	if isPendingOperationsExit(err) {
+		// The pre-check above passed, so servicing became pending while this ran, or
+		// it is pending for a reason those registry keys do not cover.
+		return taskOutcome{}, errServicingPending
+	}
 	if err != nil && !isRebootRequiredExit(err) {
 		return taskOutcome{}, fmt.Errorf("DISM %s failed: %w (output: %s)",
 			strings.Join(args, " "), err, lastLines(out, 5))
@@ -544,7 +562,25 @@ func startService(name string) error {
 const (
 	exitRebootRequired  = 3010 // ERROR_SUCCESS_REBOOT_REQUIRED
 	exitRebootInitiated = 1641 // ERROR_SUCCESS_REBOOT_INITIATED
+
+	// exitPendingOperations is CBS_E_PENDING. DISM returns it when the component
+	// store has operations queued that must settle — normally across a restart —
+	// before it will service the image.
+	exitPendingOperations = 0x800f0806
 )
+
+// errServicingPending marks a task that could not start because Windows has
+// pending servicing operations. Nothing is wrong with the machine or the module:
+// the cleanup simply cannot run until it restarts, so this is reported as a
+// skipped task rather than as an error.
+var errServicingPending = errors.New(
+	"the component store has pending operations; Windows must restart before DISM can clean it")
+
+// isPendingOperationsExit reports whether DISM refused because servicing is pending.
+func isPendingOperationsExit(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == exitPendingOperations
+}
 
 // isRebootRequiredExit reports whether a command failed only in the sense that
 // Windows wants a restart.
@@ -599,10 +635,14 @@ func isElevated() bool {
 	return windows.GetCurrentProcessToken().IsElevated()
 }
 
-// isRebootPending reports whether Windows is waiting on a restart. It is worth
-// surfacing because servicing operations queue behind a pending reboot, and
-// because cleanmgr's Update Cleanup handler only finishes during one.
-func isRebootPending(logger logging.Logger) bool {
+// isServicingRebootPending reports whether the component store itself is waiting
+// on a restart. These two keys are the condition behind CBS_E_PENDING: while
+// either is set, DISM refuses to service the image at all.
+//
+// PendingFileRenameOperations is deliberately not consulted here. Plenty of
+// ordinary software sets it, so gating DISM on it would skip the cleanup on
+// machines that could have run it fine.
+func isServicingRebootPending() bool {
 	keys := []string{
 		`SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending`,
 		`SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired`,
@@ -613,6 +653,16 @@ func isRebootPending(logger logging.Logger) bool {
 			key.Close()
 			return true
 		}
+	}
+	return false
+}
+
+// isRebootPending reports whether Windows is waiting on a restart for any reason.
+// It is worth surfacing because servicing operations queue behind a pending
+// reboot, and because cleanmgr's Update Cleanup handler only finishes during one.
+func isRebootPending(logger logging.Logger) bool {
+	if isServicingRebootPending() {
+		return true
 	}
 
 	// A queued file rename is the third signal, and unlike the keys above it lives

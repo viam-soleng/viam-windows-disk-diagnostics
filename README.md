@@ -125,6 +125,8 @@ The tasks run in the order above regardless of how `tasks` is written, so a crit
 
 ### Requirements
 
+`dism_component_cleanup` is skipped, not failed, when Windows has pending servicing operations — the `Component Based Servicing\RebootPending` or `WindowsUpdate\Auto Update\RebootRequired` registry keys, which are what DISM reports as `0x800f0806` (`CBS_E_PENDING`). The store cannot be serviced until the machine restarts, so the task reports `status: "skipped"` with `reboot_required: true` and the run continues with the other tasks. This is checked before DISM starts as well as after, so a machine in that state does not spend minutes in DISM to be told the same thing by exit code.
+
 `dism_component_cleanup` and `cleanmgr` routinely exit with 3010 (`ERROR_SUCCESS_REBOOT_REQUIRED`) on a machine that has not been cleaned before. That is a success — the work is done and a restart finishes it — so the task reports `status: "ok"` with `reboot_required: true`, not an error.
 
 All tasks require administrator rights. `viam-server` installed as a Windows service runs as LocalSystem and has them; a hand-launched `viam-server` in a normal shell does not, and the module logs a warning at startup when it is not elevated.
@@ -216,12 +218,16 @@ Everything, including `cleanmgr` and `/ResetBase`. **`dism_reset_base` is irreve
 | `{"command": "run"}` | Start a cleanup. Optional `"tasks": [...]` overrides the configured task list for this run, `"wait": true` blocks until it finishes |
 | `{"command": "status"}` | Report the in-flight run and the last completed one. `tasks` is what the running cleanup is actually executing, which a manual override can make differ from `configured_tasks` |
 | `{"command": "estimate"}` | Re-measure reclaimable space now and return it |
-| `{"command": "analyze"}` | Run `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore` and return its output plus `cleanup_recommended` |
+| `{"command": "analyze"}` | Report the DISM component-store analysis, starting one in the background if nothing is cached. Optional `"wait": true` blocks until it finishes, `"refresh": true` forces a new analysis |
 
 `run` is never rate-limited — asking for a cleanup by hand is itself the signal that one is wanted — and is refused only while another run is already in flight. Without `"wait": true` it returns immediately and the run continues in the background; poll `Readings()` or `status` for progress.
 
 ```json
 {"command": "run", "tasks": ["software_distribution", "temp_files"], "wait": true}
 ```
+
+`analyze` does not run DISM on the caller's connection. `/AnalyzeComponentStore` takes minutes on a slow machine — longer than the gRPC deadline on a `DoCommand` — so running it inline meant the caller's deadline killed DISM and the command returned an error instead of a report. Instead the first call starts the analysis and returns `{"running": true, "complete": false}`; call it again to collect the cached result, which carries `age_seconds` and `duration_seconds` alongside `output` and `cleanup_recommended`. Use `"wait": true` if your caller can hold the connection open; giving up on that wait does not stop the analysis. A result stays cached until `"refresh": true` asks for a new one.
+
+The reverse also holds: a cleanup's `dism_component_cleanup` task waits for an in-flight analysis to finish before starting, rather than opening a second DISM session on top of it. Analysis is refused while a cleanup is running `dism_component_cleanup`, since Windows permits only one servicing operation at a time; the response carries a `reason` saying so. `status` reports `analyzing` and `last_analysis` too.
 
 Omitting `tasks` runs the configured set. Passing an empty array is an error rather than a silent fallback to that set, so a caller that builds the list programmatically cannot turn "run nothing" into "run everything, DISM included".

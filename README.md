@@ -100,3 +100,120 @@ Each entry in `processes` contains `pid`, `ppid`, `name` (e.g. `firefox.exe`), `
   "name_filter": "firefox"
 }
 ```
+
+## Model viam:windows-diagnostics:diskcleanup
+
+Reclaims space on a Windows volume that Windows Update fills and never cleans up. It exists for the failure mode where `C:` runs out of room and `viam-server` goes into an unhealthy loop because it cannot unpack modules.
+
+`Readings()` is always non-destructive, so this model is safe to poll and to put under data capture. Nothing is ever deleted except by an explicit `run` command or by a configured auto-cleanup threshold being crossed.
+
+### Cleanup tasks
+
+| Task | What it removes | Typical yield | Speed |
+|------|-----------------|---------------|-------|
+| `software_distribution` | Contents of `C:\Windows\SoftwareDistribution\Download`, the Windows Update payload cache. `wuauserv` and `bits` are stopped first and always restarted afterwards. | 1–10 GB | Seconds |
+| `temp_files` | Contents of `C:\Windows\Temp` and the service account's `%TEMP%`, older than `temp_min_age_hours`. | 100 MB – several GB | Seconds |
+| `delivery_optimization` | The peer-to-peer update cache, via `Delete-DeliveryOptimizationCache` with a direct directory purge as fallback. Separate storage from `SoftwareDistribution`. | 0–5 GB | Seconds |
+| `dism_component_cleanup` | Superseded component versions in WinSxS, via `Dism.exe /Online /Cleanup-Image /StartComponentCleanup`. | 2–8 GB | Minutes to tens of minutes |
+| `cleanmgr` | The built-in Disk Cleanup handlers, run headlessly from a registry answer file. Opt-in. | Varies | Minutes, plus a slow reboot |
+
+The tasks run in the order above regardless of how `tasks` is written, so a critically full machine recovers space within seconds before the slow passes start. A failing task does not abort the ones after it.
+
+`cleanmgr` is not in the default task set. It overlaps the tasks above, its Windows Update handler only finishes during the next restart, and that restart is slow. Enable it when you also want the handlers nothing else covers — Windows.old from a feature update, error reports, thumbnails, the recycle bin.
+
+### Requirements
+
+All tasks require administrator rights. `viam-server` installed as a Windows service runs as LocalSystem and has them; a hand-launched `viam-server` in a normal shell does not, and the module logs a warning at startup when it is not elevated.
+
+### Readings
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `path` | string | Volume being watched |
+| `total_bytes`, `free_bytes`, `used_bytes` | uint64 | Volume capacity and usage |
+| `free_percent`, `used_percent` | float | Percentage, 1 decimal |
+| `reclaimable_bytes` | uint64 | Total currently held by the directory-based tasks |
+| `reclaimable_by_task` | object | Bytes per task |
+| `reclaimable_estimate_ready` | bool | False until the first background measurement completes |
+| `reclaimable_estimate_age_seconds` | float | Age of the cached measurement |
+| `cleanup_running` | bool | Whether a cleanup is in flight |
+| `cleanup_current_task`, `cleanup_elapsed_seconds` | string, float | Present while running |
+| `last_*` | | Summary of the last completed run: `last_trigger`, `last_started_at`, `last_finished_at`, `last_duration_seconds`, `last_freed_bytes`, `last_free_before`, `last_free_after`, `last_tasks` (per-task status, freed bytes, and detail) |
+| `elevated` | bool | Whether the module has the rights its tasks need |
+| `reboot_required` | bool | Windows is waiting on a restart; servicing work queues behind it |
+
+`reclaimable_by_task` covers the directory-based tasks only. DISM and `cleanmgr` cannot be sized without a multi-minute analysis, so use the `analyze` command for those.
+
+Directory sizes are measured on a background goroutine and cached for `estimate_ttl_seconds`, so `Readings()` stays cheap enough to poll at any interval.
+
+### Configuration
+
+| Name | Type | Inclusion | Description |
+|------|------|-----------|-------------|
+| `path` | string | Optional | Volume to watch. Defaults to `C:\` |
+| `tasks` | array | Optional | Which tasks to run. Defaults to everything except `cleanmgr` |
+| `dism_reset_base` | bool | Optional | Add `/ResetBase` to the component cleanup. Default `false` |
+| `temp_min_age_hours` | float | Optional | Minimum age before a temp file is deleted. Default `24` |
+| `cleanmgr_sageset_id` | int | Optional | Registry answer-file slot, 0–9999. Default `99` |
+| `cleanmgr_handlers` | array | Optional | Restrict `cleanmgr` to these handler names (e.g. `"Update Cleanup"`). Empty enables every handler on the machine |
+| `auto_cleanup_below_free_percent` | float | Optional | Run a cleanup when free space drops below this percentage. `0` disables |
+| `auto_cleanup_below_free_bytes` | uint64 | Optional | Run a cleanup when free space drops below this many bytes. `0` disables |
+| `min_cleanup_interval_hours` | float | Optional | Rate limit for automatic cleanups. Default `24`, `0` disables |
+| `task_timeout_seconds` | int | Optional | Per-task timeout. Default `2700` (45 minutes) |
+| `estimate_ttl_seconds` | int | Optional | How long a reclaimable-space measurement is reused. Default `600` |
+
+`dism_reset_base` reclaims more space but makes every already-installed update permanently un-uninstallable. Leave it off unless you have decided you will never need to roll an update back.
+
+Auto-cleanup is evaluated inside `Readings()`, so it is driven by whatever polling interval you already configured for this sensor — no separate schedule to maintain. It is off by default; set a threshold to turn it on. `min_cleanup_interval_hours` keeps a machine that is full for a reason cleanup cannot fix from running DISM on every poll; it counts from the last run of either kind, so a manual cleanup also holds off the next automatic one.
+
+#### Example Configuration
+
+Unattended: watch `C:\`, clean automatically when it drops under 15% free, at most once a day.
+
+```json
+{
+  "path": "C:\\",
+  "auto_cleanup_below_free_percent": 15,
+  "min_cleanup_interval_hours": 24
+}
+```
+
+Report-only, cleaned by hand via `DoCommand`:
+
+```json
+{
+  "path": "C:\\"
+}
+```
+
+Everything, including `cleanmgr` and `/ResetBase`:
+
+```json
+{
+  "path": "C:\\",
+  "tasks": [
+    "software_distribution",
+    "temp_files",
+    "delivery_optimization",
+    "dism_component_cleanup",
+    "cleanmgr"
+  ],
+  "dism_reset_base": true,
+  "auto_cleanup_below_free_percent": 20
+}
+```
+
+### DoCommand
+
+| Command | Description |
+|---------|-------------|
+| `{"command": "run"}` | Start a cleanup. Optional `"tasks": [...]` overrides the configured task list for this run, `"wait": true` blocks until it finishes |
+| `{"command": "status"}` | Report the in-flight run and the last completed one |
+| `{"command": "estimate"}` | Re-measure reclaimable space now and return it |
+| `{"command": "analyze"}` | Run `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore` and return its output plus `cleanup_recommended` |
+
+`run` is never rate-limited — asking for a cleanup by hand is itself the signal that one is wanted — and is refused only while another run is already in flight. Without `"wait": true` it returns immediately and the run continues in the background; poll `Readings()` or `status` for progress.
+
+```json
+{"command": "run", "tasks": ["software_distribution", "temp_files"], "wait": true}
+```

@@ -1,12 +1,12 @@
 
 GO_BUILD_ENV :=
-GO_BUILD_FLAGS :=
+GO_BUILD_FLAGS := -trimpath
 MODULE_BINARY := bin/windows-diagnostics
 VIAM_TARGET_OS := windows
 
 ifeq ($(VIAM_TARGET_OS), windows)
 	GO_BUILD_ENV += GOOS=windows GOARCH=amd64
-	GO_BUILD_FLAGS := -tags no_cgo
+	GO_BUILD_FLAGS += -tags no_cgo
 	MODULE_BINARY = bin/windows-diagnostics.exe
 endif
 

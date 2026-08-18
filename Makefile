@@ -1,12 +1,13 @@
 
 GO_BUILD_ENV :=
-GO_BUILD_FLAGS :=
+GO_BUILD_FLAGS := -trimpath
 MODULE_BINARY := bin/windows-diagnostics
 VIAM_TARGET_OS := windows
+HOST_OS := $(shell go env GOHOSTOS)
 
 ifeq ($(VIAM_TARGET_OS), windows)
 	GO_BUILD_ENV += GOOS=windows GOARCH=amd64
-	GO_BUILD_FLAGS := -tags no_cgo
+	GO_BUILD_FLAGS += -tags no_cgo
 	MODULE_BINARY = bin/windows-diagnostics.exe
 endif
 
@@ -20,8 +21,17 @@ update:
 	go get go.viam.com/rdk@latest
 	go mod tidy
 
+# Every file in components/ is //go:build windows, so on any other host the package
+# is empty and `go test ./...` fails to even load it. Cross-compiling a test binary
+# would not help: it cannot be executed here. Type-check against the target instead,
+# which is all `go test` provided anyway while the repo has no test files.
 test:
-	go test ./...
+ifeq ($(HOST_OS), windows)
+	$(GO_BUILD_ENV) go test $(GO_BUILD_FLAGS) ./...
+else
+	@echo "host is $(HOST_OS): type-checking for windows/amd64 (tests only run on a windows host)"
+	$(GO_BUILD_ENV) go build $(GO_BUILD_FLAGS) ./...
+endif
 
 module.tar.gz: meta.json $(MODULE_BINARY)
 ifneq ($(VIAM_TARGET_OS), windows)

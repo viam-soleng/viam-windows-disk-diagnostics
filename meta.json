@@ -3,7 +3,7 @@
   "module_id": "viam:windows-diagnostics",
   "visibility": "public",
   "url": "https://github.com/viam-soleng/viam-windows-disk-diagnostics",
-  "description": "Windows device telemetry sensors: disk, CPU, memory, and task list.",
+  "description": "Windows device telemetry sensors: disk, CPU, memory, task list, and disk cleanup.",
   "models": [
     {
       "api": "rdk:component:sensor",
@@ -28,11 +28,17 @@
       "model": "viam:windows-diagnostics:tasklist",
       "short_description": "Reports the list of processes currently running on Windows.",
       "markdown_link": "README.md#model-viamwindows-diagnosticstasklist"
+    },
+    {
+      "api": "rdk:component:sensor",
+      "model": "viam:windows-diagnostics:diskcleanup",
+      "short_description": "Reports reclaimable disk space and reclaims it on demand or when free space falls below a threshold.",
+      "markdown_link": "README.md#model-viamwindows-diagnosticsdiskcleanup"
     }
   ],
   "applications": null,
   "markdown_link": "README.md",
-  "entrypoint": "bin/windows-diagnostics",
+  "entrypoint": "bin/windows-diagnostics.exe",
   "first_run": "",
   "build": {
     "build": "make module.tar.gz",

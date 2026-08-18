@@ -178,8 +178,10 @@ type taskResult struct {
 	Status       string // "ok", "error", or "skipped"
 	FreedBytes   uint64 // measured as the volume's free-space delta across the task
 	ItemsRemoved int
-	Detail       string
-	Seconds      float64
+	// RebootRequired marks a task that did its work but needs a restart to finish.
+	RebootRequired bool
+	Detail         string
+	Seconds        float64
 }
 
 // cleanupRun records the outcome of one complete cleanup pass.
@@ -189,8 +191,20 @@ type cleanupRun struct {
 	FinishedAt time.Time
 	FreeBefore uint64
 	FreeAfter  uint64
-	Tasks      []taskResult
-	Err        string
+	// FreeMeasured is false when either free-space sample failed, which makes the
+	// before/after delta meaningless.
+	FreeMeasured bool
+	Tasks        []taskResult
+	Err          string
+}
+
+// freedBytes reports the volume-level space reclaimed, or 0 when either endpoint
+// of the measurement is missing.
+func (run *cleanupRun) freedBytes() uint64 {
+	if !run.FreeMeasured {
+		return 0
+	}
+	return saturatingSub(run.FreeAfter, run.FreeBefore)
 }
 
 type windowsDiagnosticsDiskCleanup struct {
@@ -219,6 +233,7 @@ type windowsDiagnosticsDiskCleanup struct {
 	running      bool
 	runningSince time.Time
 	runningTask  string
+	runningTasks []string
 	last         *cleanupRun
 	estimate     map[string]uint64
 	estimatedAt  time.Time
@@ -407,11 +422,18 @@ func (s *windowsDiagnosticsDiskCleanup) Close(context.Context) error {
 
 // --- config helpers ---
 
-// resolveTasks de-duplicates the configured task list and puts it in taskOrder.
+// resolveTasks turns a configured task list into the set to run, substituting the
+// default set when the config omitted the field entirely.
 func resolveTasks(configured []string) []string {
 	if len(configured) == 0 {
 		return defaultTasks
 	}
+	return orderTasks(configured)
+}
+
+// orderTasks de-duplicates a task list and puts it in taskOrder. An empty list
+// stays empty — only resolveTasks applies the default set.
+func orderTasks(configured []string) []string {
 	seen := make(map[string]bool, len(configured))
 	for _, t := range configured {
 		seen[t] = true

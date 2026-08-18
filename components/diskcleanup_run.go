@@ -105,11 +105,14 @@ func (s *windowsDiagnosticsDiskCleanup) doStatus() map[string]interface{} {
 	defer s.mu.Unlock()
 
 	status := map[string]interface{}{
-		"running":  s.running,
-		"tasks":    toInterfaceSlice(s.tasks),
-		"elevated": isElevated(),
+		"running":          s.running,
+		"configured_tasks": toInterfaceSlice(s.tasks),
+		"elevated":         isElevated(),
 	}
 	if s.running {
+		// The running set can differ from the configured one, because a manual run may
+		// override it; reporting s.tasks here would misstate what is actually happening.
+		status["tasks"] = toInterfaceSlice(s.runningTasks)
 		status["current_task"] = s.runningTask
 		status["elapsed_seconds"] = math.Round(time.Since(s.runningSince).Seconds())
 	}
@@ -170,6 +173,7 @@ func (s *windowsDiagnosticsDiskCleanup) startRunLocked(trigger string, tasks []s
 	s.running = true
 	s.runningSince = time.Now()
 	s.runningTask = ""
+	s.runningTasks = tasks
 	s.done = finished
 
 	go func() {
@@ -179,6 +183,7 @@ func (s *windowsDiagnosticsDiskCleanup) startRunLocked(trigger string, tasks []s
 		s.mu.Lock()
 		s.running = false
 		s.runningTask = ""
+		s.runningTasks = nil
 		s.last = run
 		// Deletions invalidate the cached sizes; force the next Readings to re-measure.
 		s.estimatedAt = time.Time{}
@@ -199,6 +204,9 @@ func (s *windowsDiagnosticsDiskCleanup) executeRun(trigger string, tasks []strin
 		s.logger.Warnf("Could not read free space before cleanup: %v", err)
 	}
 	run.FreeBefore = freeBefore
+	// Without a trustworthy baseline there is nothing to subtract from, and reporting
+	// the volume's whole free space as reclaimed would be worse than reporting nothing.
+	run.FreeMeasured = err == nil
 
 	s.logger.Infof("Disk cleanup (%s) starting on %s with %d bytes free", trigger, s.path, freeBefore)
 
@@ -231,13 +239,14 @@ func (s *windowsDiagnosticsDiskCleanup) executeRun(trigger string, tasks []strin
 	if err != nil {
 		s.logger.Warnf("Could not read free space after cleanup: %v", err)
 		freeAfter = run.FreeBefore
+		run.FreeMeasured = false
 	}
 	run.FreeAfter = freeAfter
 	run.FinishedAt = time.Now()
 
 	s.logger.Infof("Disk cleanup (%s) finished in %s, reclaimed %d bytes (%d free)",
 		trigger, run.FinishedAt.Sub(run.StartedAt).Truncate(time.Second),
-		saturatingSub(freeAfter, run.FreeBefore), freeAfter)
+		run.freedBytes(), freeAfter)
 
 	return run
 }
@@ -252,29 +261,29 @@ func (s *windowsDiagnosticsDiskCleanup) executeTask(name string) taskResult {
 	defer cancel()
 
 	var (
-		items  int
-		detail string
-		err    error
+		outcome taskOutcome
+		err     error
 	)
 	switch name {
 	case taskSoftwareDistribution:
-		items, detail, err = s.cleanSoftwareDistribution(ctx)
+		outcome, err = s.cleanSoftwareDistribution(ctx)
 	case taskTempFiles:
-		items, detail, err = s.cleanTempFiles(ctx)
+		outcome, err = s.cleanTempFiles(ctx)
 	case taskDeliveryOptimization:
-		items, detail, err = s.cleanDeliveryOptimization(ctx)
+		outcome, err = s.cleanDeliveryOptimization(ctx)
 	case taskDISMComponentCleanup:
-		items, detail, err = s.runDISMComponentCleanup(ctx)
+		outcome, err = s.runDISMComponentCleanup(ctx)
 	case taskCleanmgr:
-		items, detail, err = s.runCleanmgr(ctx)
+		outcome, err = s.runCleanmgr(ctx)
 	default:
 		err = fmt.Errorf("unknown task %q", name)
 	}
 
 	freeAfter, afterErr := s.freeBytes()
 
-	result.ItemsRemoved = items
-	result.Detail = detail
+	result.ItemsRemoved = outcome.items
+	result.Detail = outcome.detail
+	result.RebootRequired = outcome.rebootRequired
 	result.Seconds = math.Round(time.Since(started).Seconds())
 	// Attribute freed space only when both samples are trustworthy; a failed read
 	// returns 0, which would otherwise be reported as the whole volume reclaimed.
@@ -283,7 +292,14 @@ func (s *windowsDiagnosticsDiskCleanup) executeTask(name string) taskResult {
 	}
 	if err != nil {
 		result.Status = "error"
-		result.Detail = err.Error()
+		// Keep whatever the task managed to do before it failed: "removed 812 entries;
+		// emptying C:\\Windows\\Temp: access denied" tells an operator far more than
+		// the error alone, which reads as if nothing happened.
+		if outcome.detail != "" {
+			result.Detail = outcome.detail + "; " + err.Error()
+		} else {
+			result.Detail = err.Error()
+		}
 	}
 	return result
 }
@@ -356,7 +372,10 @@ func parseTaskList(raw interface{}) ([]string, error) {
 		}
 		tasks = append(tasks, name)
 	}
-	return resolveTasks(tasks), nil
+	// orderTasks, not resolveTasks: an explicitly empty array must stay empty so the
+	// caller's guard rejects it. Falling back to the default set here would turn
+	// "run nothing" into "run everything, including DISM".
+	return orderTasks(tasks), nil
 }
 
 // runSummary flattens a run for readings and DoCommand responses. Values stay in
@@ -372,6 +391,7 @@ func runSummary(run *cleanupRun) map[string]interface{} {
 			"status":           t.Status,
 			"freed_bytes":      t.FreedBytes,
 			"items_removed":    t.ItemsRemoved,
+			"reboot_required":  t.RebootRequired,
 			"duration_seconds": t.Seconds,
 			"detail":           t.Detail,
 		})
@@ -381,9 +401,10 @@ func runSummary(run *cleanupRun) map[string]interface{} {
 		"started_at":       run.StartedAt.UTC().Format(time.RFC3339),
 		"finished_at":      run.FinishedAt.UTC().Format(time.RFC3339),
 		"duration_seconds": math.Round(run.FinishedAt.Sub(run.StartedAt).Seconds()),
-		"freed_bytes":      saturatingSub(run.FreeAfter, run.FreeBefore),
+		"freed_bytes":      run.freedBytes(),
 		"free_before":      run.FreeBefore,
 		"free_after":       run.FreeAfter,
+		"free_measured":    run.FreeMeasured,
 		"tasks":            tasks,
 	}
 	if run.Err != "" {

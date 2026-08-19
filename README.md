@@ -223,7 +223,7 @@ Everything, including `cleanmgr` and `/ResetBase`. **`dism_reset_base` is irreve
 `run` is never rate-limited — asking for a cleanup by hand is itself the signal that one is wanted — and is refused only while another run is already in flight. Without `"wait": true` it returns immediately and the run continues in the background; poll `Readings()` or `status` for progress.
 
 ```json
-{"command": "run", "tasks": ["software_distribution", "temp_files"], "wait": true}
+{"command": "run", "tasks": ["software_distribution","delivery_optimization", "temp_files"], "wait": true}
 ```
 
 `analyze` does not run DISM on the caller's connection. `/AnalyzeComponentStore` takes minutes on a slow machine — longer than the gRPC deadline on a `DoCommand` — so running it inline meant the caller's deadline killed DISM and the command returned an error instead of a report. Instead the first call starts the analysis and returns `{"running": true, "complete": false}`; call it again to collect the cached result, which carries `age_seconds` and `duration_seconds` alongside `output` and `cleanup_recommended`. Use `"wait": true` if your caller can hold the connection open; giving up on that wait does not stop the analysis. A result stays cached until `"refresh": true` asks for a new one.
